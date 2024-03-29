@@ -54,6 +54,12 @@ int main(int argc,char* argv[]) {
     /* Read image in grayscale */
     uint8_t *input_image = stbi_load(input.c_str(), &width, &height, &bpp, CHANNEL_NUM);
 
+    if(stbi_failure_reason()) {
+        std::cerr << stbi_failure_reason() << " \"" + input + "\"\n";
+        std::cerr << "Aborting...\n";
+        exit(1);
+    }
+
     printf("Width: %d  Height: %d  BPP: %d \n",width, height, bpp);
     printf("Input: %s , Output: %s  \n",input.c_str(), output.c_str());
 
