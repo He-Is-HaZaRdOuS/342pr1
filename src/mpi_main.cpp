@@ -33,7 +33,7 @@
 
 //Do not use global variables
 
-void par_edgeDetection(uint8_t *input_image, int width, int height, int zone, int start);
+void par_edgeDetection(uint8_t *input_image, int width, int height, int zone, int start, int rank);
 float convolve(float slider[KERNEL_DIMENSION][KERNEL_DIMENSION], float kernel[KERNEL_DIMENSION][KERNEL_DIMENSION]);
 
 int main(int argc,char* argv[]) {
@@ -43,19 +43,19 @@ int main(int argc,char* argv[]) {
     }
 
     int m_rank, comm_sz;
-    uint8_t *input_image;
+    int width, height, bpp;
+    int buf_size;
     MPI_Init(&argc,&argv);
     MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
     MPI_Comm_rank(MPI_COMM_WORLD, &m_rank);
-    int width, height, bpp;
-    int zone;
-    int start_index;
-    int buf_size;
-    if(m_rank == 0) {
+    std::string input;
+    std::string output;
+    uint8_t *input_image = nullptr;
 
+    if(m_rank == 0) {
         /* Prepend path to input and output filenames */
-        std::string input = RESOURCES_PATH;
-        std::string output = PARALLEL_OUTPUT_PATH;
+        input = RESOURCES_PATH;
+        output = PARALLEL_OUTPUT_PATH;
         input = input + argv[1];
         output = output + argv[2];
 
@@ -68,71 +68,57 @@ int main(int argc,char* argv[]) {
             exit(1);
         }
 
+        //stbi_write_jpg("z.c_str()", width, height, CHANNEL_NUM, input_image, 100);
+
         buf_size = width * height;
-        uint8_t *output_image_u8 = (uint8_t*) malloc(buf_size * sizeof(uint8_t)); // NOLINT(*-use-auto)
 
         printf("Width: %d  Height: %d  BPP: %d \n",width, height, bpp);
         printf("Input: %s , Output: %s  \n",input.c_str(), output.c_str());
+    }
 
-        zone = height/comm_sz;
-        for(int dest = 1; dest < comm_sz; ++dest) {
-            start_index = dest * zone;
-            MPI_Send(&zone, 1, MPI_INT, dest, 0, MPI_COMM_WORLD);
-            MPI_Send(&buf_size, 1, MPI_INT, dest, 1, MPI_COMM_WORLD);
-            MPI_Send(&start_index, 1, MPI_INT, dest, 2, MPI_COMM_WORLD);
-            MPI_Send(input_image, buf_size, MPI_UINT8_T, dest, 3, MPI_COMM_WORLD);
-            MPI_Send(&width, 1, MPI_INT, dest, 4, MPI_COMM_WORLD);
-            MPI_Send(&height, 1, MPI_INT, dest, 5, MPI_COMM_WORLD);
-        }
+    MPI_Bcast(&width, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&height, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&buf_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    const int zone = height / comm_sz;
 
-        // start the timer
-        double time1= MPI_Wtime();
+    //std::cout << "Process: " << m_rank << " width: " << width << " height: " << height << " zone:" << zone << " buf: " << buf_size << std::endl;
 
-        par_edgeDetection(input_image, width, height, zone, 0);
+    uint8_t *temp_out = (uint8_t*) malloc( width * zone * sizeof(uint8_t)); // NOLINT(*-use-auto)
 
-        for(int sender = 1; sender < comm_sz; ++sender) {
-            start_index = sender * zone;
-            std::cout << std::endl <<  start_index << std::endl;
-            uint8_t *out = (uint8_t*) malloc(buf_size * sizeof(uint8_t)); // NOLINT(*-use-auto)
-            MPI_Recv(out, buf_size, MPI_UINT8_T, sender, 9 ,MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            /* copy zone to input array */
-            for(int y = start_index; y < height; ++y) {
-                for(int x = 0; x < width; ++x) {
-                    input_image[x +  y * width] = out[x + y * width];
-                }
-            }
-        }
+    MPI_Barrier(MPI_COMM_WORLD);
+    // start the timer
+    double time1= MPI_Wtime();
 
-        double time2= MPI_Wtime();
-        printf("Elapsed time: %lf \n",time2-time1);
+    MPI_Scatter(input_image, zone * width, MPI_UINT8_T, temp_out, zone * width, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+    par_edgeDetection(temp_out, width, height, zone, 0, m_rank);
 
+    uint8_t *out = nullptr;
+    if(m_rank == 0) {
+         out = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
+    }
+
+    MPI_Gather(temp_out, zone * width, MPI_UINT8_T, out, zone * width, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+
+    double time2= MPI_Wtime();
+    printf("Elapsed time: %lf \n",time2-time1);
+    if(m_rank == 0) {
         // Storing the image
-        stbi_write_jpg(output.c_str(), width, height, CHANNEL_NUM, input_image, 100);
+        stbi_write_jpg(output.c_str(), width, height, CHANNEL_NUM, out, 100);
         stbi_image_free(input_image);
-
-        free(output_image_u8);
     }
-    else {
-        MPI_Recv(&zone, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        std::cout << "I'm process: " << m_rank << " and I recieved zone: " << zone << std::endl;
-        MPI_Recv(&buf_size, 1, MPI_INT, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        std::cout << "I'm process: " << m_rank << " and I recieved buf: " << buf_size << std::endl;
-        MPI_Recv(&start_index, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        uint8_t *in = (uint8_t*) malloc(buf_size * sizeof(uint8_t)); // NOLINT(*-use-auto)
-        MPI_Recv(in, buf_size, MPI_UINT8_T, 0, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        MPI_Recv(&width, 1, MPI_INT, 0, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        MPI_Recv(&height, 1, MPI_INT, 0, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        par_edgeDetection(in, width, height, zone, start_index);
-        MPI_Send(in, buf_size, MPI_UINT8_T, 0, 9, MPI_COMM_WORLD);
 
-    }
+    free(temp_out);
+    free(out);
 
     MPI_Finalize();
     return 0;
 }
 
 /* Apply Sobel's Operator  */
-void par_edgeDetection(uint8_t *input_image, int width, int height, int zone, int start) {
+void par_edgeDetection(uint8_t *input_image, int width, int height, int zone, int start, int rank) {
+    std::string z = std::to_string(rank) + ".jpg";
+    z = PARALLEL_OUTPUT_PATH + z;
+    //stbi_write_jpg(z.c_str(), width, zone, CHANNEL_NUM, input_image, 100);
     /* Declare Kernels */
     float sobelX[KERNEL_DIMENSION][KERNEL_DIMENSION] = { {-1, 0, 1},{-2, 0, 2},{-1, 0, 1} };
     float sobelY[KERNEL_DIMENSION][KERNEL_DIMENSION] = { {-1, -2, -1},{0, 0, 0},{1, 2, 1} };
@@ -145,14 +131,14 @@ void par_edgeDetection(uint8_t *input_image, int width, int height, int zone, in
     float gy = 0;
 
     /* Allocate temporary memory to construct final image */
-    uint8_t *output_image = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
+    uint8_t *output_image = (uint8_t*) malloc(width * zone * sizeof(uint8_t)); // NOLINT(*-use-auto)
     //uint8_t *output_image_blur_u8 = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
     //uint8_t *gradientX_u8 = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
     //uint8_t *gradientY_u8 = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
     //uint8_t *angle_u8 = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
 
     /* Iterate through all pixels */
-	for(int y = start; y < zone + start; ++y) {
+	for(int y = start; y < zone; ++y) {
 	    //std::cout << "Entered Sobel from index: " << start << " till index: " << start + zone << std::endl;
 		for(int x = 0; x < width; ++x) {
             for(int wy = 0; wy < KERNEL_DIMENSION; ++wy) {
@@ -166,7 +152,7 @@ void par_edgeDetection(uint8_t *input_image, int width, int height, int zone, in
                         yIndex = -yIndex;
                     if(xIndex >= width)
                         xIndex = xIndex - KERNEL_DIMENSION - 1;
-                    if(yIndex >= height)
+                    if(yIndex >= zone)
                         yIndex = yIndex - KERNEL_DIMENSION - 1;
 
                     /* Build up moving window */
@@ -193,15 +179,16 @@ void par_edgeDetection(uint8_t *input_image, int width, int height, int zone, in
 	}
 
     /* copy zone to input array */
-    for(int y = start; y < zone + start; ++y) {
+    for(int y = start; y < zone; ++y) {
         for(int x = 0; x < width; ++x) {
-            input_image[x +  y * width] = output_image[x + y * width];
+            input_image[x + y * width] = output_image[x + y * width];
         }
     }
-
+/*
     std::string z = std::to_string(start) + ".jpg";
     z = PARALLEL_OUTPUT_PATH + z;
-    //stbi_write_jpg(z.c_str(), width, height, CHANNEL_NUM, input_image, 100);
+    stbi_write_jpg(z.c_str(), width, zone, CHANNEL_NUM, input_image, 100);
+    */
 /*
     stbi_write_jpg(SEQUENTIAL_OUTPUT_PATH "sobel.jpg", width, height, CHANNEL_NUM, output_image_u8, 100);
     stbi_write_jpg(SEQUENTIAL_OUTPUT_PATH "gradientX.jpg", width, height, CHANNEL_NUM, gradientX_u8, 100);

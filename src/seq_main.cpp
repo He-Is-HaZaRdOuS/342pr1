@@ -29,7 +29,7 @@
 #define CHANNEL_NUM 1
 #define KERNEL_DIMENSION 3
 #define THRESHOLD 40
-#define USE_THRESHOLD 0
+#define USE_THRESHOLD 1
 
 //Do not use global variables
 
