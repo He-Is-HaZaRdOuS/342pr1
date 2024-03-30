@@ -42,7 +42,7 @@
 
 //Do not use global variables
 
-void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, int comm_sz);
+void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, int comm_sz, int offset);
 float convolve(float slider[KERNEL_DIMENSION][KERNEL_DIMENSION], float kernel[KERNEL_DIMENSION][KERNEL_DIMENSION]);
 
 void print_affinity() {
@@ -68,7 +68,7 @@ int main(int argc,char* argv[]) {
     }
 
     MPI_Init(&argc,&argv);
-    int m_rank, comm_sz, width, height, bpp, buf_size;
+    int m_rank, comm_sz, width, height, bpp, buf_size, offset;
     std::string input, output;
     MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
     MPI_Comm_rank(MPI_COMM_WORLD, &m_rank);
@@ -127,39 +127,34 @@ int main(int argc,char* argv[]) {
     /* Map zones to processes */
     if(m_rank == 0) {
         /* memcpy 0 - zone+2 to process 0 from input */
-        memcpy(temp_out, input_image, (zone * width + 1) * sizeof(uint8_t));
+        memcpy(temp_out, input_image, (zone * width + 2) * sizeof(uint8_t));
+        offset = -1;
 
         for(int dest = 1; dest < comm_sz; ++dest) {
             if(dest != comm_sz - 1) {
                 /* Send zone-1 - zone+1 to intermediate processes */
-                MPI_Send((input_image + ((zone - 1) * width * dest)), (zone + 2) * width, MPI_UINT8_T, dest, 1, MPI_COMM_WORLD);
+                MPI_Send((input_image + ((zone -1) * width * dest)), (zone + 2) * width, MPI_UINT8_T, dest, 1, MPI_COMM_WORLD);
             }
             else {
-                /* Send zone-1 - zone to last process */
-                MPI_Send((input_image + (zone * width * dest)), zone * width, MPI_UINT8_T, dest, 1, MPI_COMM_WORLD);
+                /* Send zone-2 - zone to last process */
+                MPI_Send((input_image + ((zone -2) * width * dest)), (zone + 2) * width, MPI_UINT8_T, dest, 1, MPI_COMM_WORLD);
             }
         }
     }
     else {
-        if(m_rank != comm_sz -1) {
-            MPI_Recv(temp_out, (zone + 2) * width, MPI_UINT8_T, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        }
-        else {
-            MPI_Recv(temp_out, zone * width, MPI_UINT8_T, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(temp_out, (zone + 2) * width, MPI_UINT8_T, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        offset = 0;
+        if(m_rank == comm_sz - 1) {
+            offset = 1;
         }
     }
 
     //MPI_Scatter(input_image, zone * width, MPI_UINT8_T, temp_out, zone * width, MPI_UINT8_T, 0, MPI_COMM_WORLD);
 
     /* Apply Sobel's operator */
-    if(m_rank != 0 || m_rank != comm_sz - 1) {
-        /* Intermediate zones */
-        par_edgeDetection(temp_out, width, zone + 2, m_rank, comm_sz);
-    }
-    else {
-        /* First and last zones */
-        par_edgeDetection(temp_out, width, zone, m_rank, comm_sz);
-    }
+    //if(m_rank != 0) {
+        par_edgeDetection(temp_out, width, zone + 2, m_rank, comm_sz, offset);
+    //}
 
     uint8_t *out = nullptr;
     if(m_rank == 0) {
@@ -167,22 +162,7 @@ int main(int argc,char* argv[]) {
     }
 
     /* Collect sub-solutions into one buffer on process 0 */
-    //MPI_Gather(temp_out, zone * width, MPI_UINT8_T, out, zone * width, MPI_UINT8_T, 0, MPI_COMM_WORLD);
-    if(m_rank != 0) {
-        MPI_Send(temp_out + 1, zone*width, MPI_UINT8_T, 0, 1, MPI_COMM_WORLD);
-        /*else {
-            MPI_Send(temp_out + 1, zone, MPI_UINT8_T, 0, 1, MPI_COMM_WORLD);
-        }
-        */
-    }
-    else {
-        memcpy(out, temp_out, zone*width*sizeof(uint8_t));
-        for(int sender = 1; sender < comm_sz; ++sender) {
-            uint8_t *tmp = (uint8_t*)malloc(width * zone * sizeof(uint8_t));
-            MPI_Recv(tmp, zone*width, MPI_UINT8_T, sender, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            memcpy(out + sender * zone, tmp, zone*width*sizeof(uint8_t));
-        }
-    }
+    MPI_Gather(temp_out, zone * width, MPI_UINT8_T, out, zone * width, MPI_UINT8_T, 0, MPI_COMM_WORLD);
 
     /* Synchronize and stop timer */
     MPI_Barrier(MPI_COMM_WORLD);
@@ -248,7 +228,7 @@ int main(int argc,char* argv[]) {
 }
 
 /* Apply Sobel's Operator  */
-void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, int comm_sz) {
+void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, int comm_sz, int offset) {
 
     /* Declare Kernels */
     float sobelX[KERNEL_DIMENSION][KERNEL_DIMENSION] = { {-1, 0, 1},{-2, 0, 2},{-1, 0, 1} };
@@ -262,10 +242,10 @@ void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, in
     float gy = 0;
 
     /* Allocate temporary memory to construct final image */
-    uint8_t *output_image = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
+    uint8_t *output_image = (uint8_t*) malloc(width * (height - 2) * sizeof(uint8_t)); // NOLINT(*-use-auto)
 
     /* Iterate through all pixels */
-	for(int y = 1 ; y < height - 1; ++y) {
+	for(int y = 1 + offset ; y < height - 1 + offset; ++y) {
 	    //std::cout << "Entered Sobel from index: " << y << " till index: " << height - 1 << std::endl;
 		for(int x = 0; x < width; ++x) {
             for(int wy = 0; wy < KERNEL_DIMENSION; ++wy) {
@@ -279,7 +259,7 @@ void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, in
                         yIndex = -yIndex;
                     if(xIndex >= width)
                         xIndex = xIndex - KERNEL_DIMENSION - 1;
-                    if(yIndex >= height)
+                    if(yIndex >= height - 1 + offset)
                         yIndex = yIndex - KERNEL_DIMENSION - 1;
 
                     /* Build up moving window */
@@ -294,7 +274,7 @@ void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, in
 
 #if USE_THRESHOLD
             /* Clamp down color values if */
-            output_image[x + (y) * width] = magnitude > THRESHOLD ? 255 : 0;
+            output_image[x + (y - 1 - offset) * width] = magnitude > THRESHOLD ? 255 : 0;
 #else
             /* Use whatever value outputted from square root */
             output_image[x + y * width] = (uint8_t) magnitude;
@@ -303,25 +283,10 @@ void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, in
 		}
 	}
 
-    int offset = 0;
-    int indexOffset = 0;
-    if(rank == 0) {
-        offset = -1;
-        indexOffset = 0;
-    }
-    else if (rank == comm_sz - 1) {
-        offset = -1;
-        indexOffset = 1;
-    }
-    else {
-        offset = -2;
-        indexOffset = 1;
-    }
-
     /* copy zone to input array */
-    for(int y = 0 ; y < height + offset; ++y) {
+    for(int y = 0 ; y < height - 2; ++y) {
         for(int x = 0; x < width; ++x) {
-            input_image[x + (y) * width] = output_image[x + (y + indexOffset) * width];
+            input_image[x + (y) * width] = output_image[x + (y) * width];
         }
     }
 
