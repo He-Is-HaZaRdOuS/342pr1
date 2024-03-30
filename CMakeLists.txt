@@ -16,6 +16,7 @@ target_compile_definitions(sequential PUBLIC RESOURCES_PATH="${CMAKE_CURRENT_SOU
 target_compile_definitions(parallel PUBLIC RESOURCES_PATH="${CMAKE_CURRENT_SOURCE_DIR}/res/")
 
 target_compile_definitions(sequential PUBLIC SEQUENTIAL_OUTPUT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/sequential_output/")
+target_compile_definitions(parallel PUBLIC SEQUENTIAL_OUTPUT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/sequential_output/")
 target_compile_definitions(parallel PUBLIC PARALLEL_OUTPUT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/parallel_output/")
 
 target_include_directories(sequential PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/")

@@ -71,7 +71,6 @@ int main(int argc,char* argv[]) {
     double time2= MPI_Wtime();
     printf("Elapsed time: %lf \n",time2-time1);
 
-    // Storing the image
     stbi_write_jpg(output.c_str(), width, height, CHANNEL_NUM, input_image, 100);
     stbi_image_free(input_image);
 
