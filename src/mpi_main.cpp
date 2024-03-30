@@ -15,12 +15,6 @@
  * @version 1.0, 02 March 2024
  */
 
-#define _GNU_SOURCE
-#include <assert.h>
-#include <sched.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <unistd.h>
 #include <cmath>
 #include <cstdio>
@@ -31,8 +25,6 @@
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 
-#include <pstl/execution_defs.h>
-
 #include "stb_image.h"
 #include "stb_image_write.h"
 #define CHANNEL_NUM 1
@@ -42,24 +34,8 @@
 
 //Do not use global variables
 
-void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, int comm_sz, int offset);
+void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, int comm_sz);
 float convolve(float slider[KERNEL_DIMENSION][KERNEL_DIMENSION], float kernel[KERNEL_DIMENSION][KERNEL_DIMENSION]);
-
-void print_affinity() {
-    cpu_set_t mask;
-    long nproc, i;
-
-    if (sched_getaffinity(0, sizeof(cpu_set_t), &mask) == -1) {
-        perror("sched_getaffinity");
-        assert(false);
-    }
-    nproc = sysconf(_SC_NPROCESSORS_ONLN);
-    printf("sched_getaffinity = ");
-    for (i = 0; i < nproc; i++) {
-        printf("%d ", CPU_ISSET(i, &mask));
-    }
-    printf("\n");
-}
 
 int main(int argc,char* argv[]) {
     if(argc != 3){
@@ -68,7 +44,7 @@ int main(int argc,char* argv[]) {
     }
 
     MPI_Init(&argc,&argv);
-    int m_rank, comm_sz, width, height, bpp, buf_size, offset;
+    int m_rank, comm_sz, width, height, bpp, buf_size;
     std::string input, output;
     MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
     MPI_Comm_rank(MPI_COMM_WORLD, &m_rank);
@@ -102,71 +78,49 @@ int main(int argc,char* argv[]) {
     MPI_Bcast(&buf_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
     /* Partition work among processes */
     const int zone = height / comm_sz;
-
-/*
-    cpu_set_t mask;
-    print_affinity();
-    printf("sched_getcpu = %d\n", sched_getcpu());
-    CPU_ZERO(&mask);
-    CPU_SET(m_rank, &mask);
-    if (sched_setaffinity(0, sizeof(cpu_set_t), &mask) == -1) {
-        perror("sched_setaffinity");
-        assert(false);
-    }
-    print_affinity();
-    // TODO is it guaranteed to have taken effect already? Always worked on my tests.
-    printf("sched_getcpu = %d\n", sched_getcpu());
-*/
+    const int wh = width * height;
+    const int zw = zone * width;
 
     /* Allocate a temporary output buffer for each process */
     uint8_t *temp_out = (uint8_t*) malloc( (width * (zone + 2)) * sizeof(uint8_t)); // NOLINT(*-use-auto)
 
-    /* Start the timer */
-    double time1= MPI_Wtime();
-
     /* Map zones to processes */
     if(m_rank == 0) {
         /* memcpy 0 - zone+2 to process 0 from input */
-        memcpy(temp_out, input_image, (zone * width + 2) * sizeof(uint8_t));
-        offset = -1;
+        memcpy(temp_out, input_image, ((zone + 2)* width) * sizeof(uint8_t));
 
         for(int dest = 1; dest < comm_sz; ++dest) {
             if(dest != comm_sz - 1) {
                 /* Send zone-1 - zone+1 to intermediate processes */
-                MPI_Send((input_image + ((zone -1) * width * dest)), (zone + 2) * width, MPI_UINT8_T, dest, 1, MPI_COMM_WORLD);
+                MPI_Send(&input_image[(zw * dest) - width], (zone + 2) * width, MPI_UINT8_T, dest, 1, MPI_COMM_WORLD);
             }
             else {
                 /* Send zone-2 - zone to last process */
-                MPI_Send((input_image + ((zone -2) * width * dest)), (zone + 2) * width, MPI_UINT8_T, dest, 1, MPI_COMM_WORLD);
+                MPI_Send(&input_image[(zw * dest) - (width * 2)], (zone + 2) * width, MPI_UINT8_T, dest, 1, MPI_COMM_WORLD);
             }
         }
     }
     else {
         MPI_Recv(temp_out, (zone + 2) * width, MPI_UINT8_T, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        offset = 0;
-        if(m_rank == comm_sz - 1) {
-            offset = 1;
-        }
     }
 
-    //MPI_Scatter(input_image, zone * width, MPI_UINT8_T, temp_out, zone * width, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+    /* Start the timer */
+    double time1= MPI_Wtime();
 
     /* Apply Sobel's operator */
-    //if(m_rank != 0) {
-        par_edgeDetection(temp_out, width, zone + 2, m_rank, comm_sz, offset);
-    //}
-
-    uint8_t *out = nullptr;
-    if(m_rank == 0) {
-         out = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
-    }
-
-    /* Collect sub-solutions into one buffer on process 0 */
-    MPI_Gather(temp_out, zone * width, MPI_UINT8_T, out, zone * width, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+    par_edgeDetection(temp_out, width, zone + 2, m_rank, comm_sz);
 
     /* Synchronize and stop timer */
     MPI_Barrier(MPI_COMM_WORLD);
     double time2= MPI_Wtime();
+
+    uint8_t *out = nullptr;
+    if(m_rank == 0) {
+         out = (uint8_t*) malloc(wh * sizeof(uint8_t)); // NOLINT(*-use-auto)
+    }
+
+    /* Collect sub-solutions into one buffer on process 0 */
+    MPI_Gather(temp_out, zw, MPI_UINT8_T, out, zw, MPI_UINT8_T, 0, MPI_COMM_WORLD);
 
     if(m_rank == 0) {
         printf("Elapsed time: %lf \n",time2-time1);
@@ -207,6 +161,7 @@ int main(int argc,char* argv[]) {
             exit(1);
         }
 
+        /* Make sure sequential and parallel outputs are the same */
         int err_cnt = 0;
         for(int y = 0; y < height; ++y) {
             for(int x = 0; x < width; ++x) {
@@ -228,7 +183,7 @@ int main(int argc,char* argv[]) {
 }
 
 /* Apply Sobel's Operator  */
-void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, int comm_sz, int offset) {
+void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, int comm_sz) {
 
     /* Declare Kernels */
     float sobelX[KERNEL_DIMENSION][KERNEL_DIMENSION] = { {-1, 0, 1},{-2, 0, 2},{-1, 0, 1} };
@@ -242,10 +197,10 @@ void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, in
     float gy = 0;
 
     /* Allocate temporary memory to construct final image */
-    uint8_t *output_image = (uint8_t*) malloc(width * (height - 2) * sizeof(uint8_t)); // NOLINT(*-use-auto)
+    uint8_t *output_image = (uint8_t*) malloc(width * (height) * sizeof(uint8_t)); // NOLINT(*-use-auto)
 
     /* Iterate through all pixels */
-	for(int y = 1 + offset ; y < height - 1 + offset; ++y) {
+	for(int y = 0 ; y < height; ++y) {
 	    //std::cout << "Entered Sobel from index: " << y << " till index: " << height - 1 << std::endl;
 		for(int x = 0; x < width; ++x) {
             for(int wy = 0; wy < KERNEL_DIMENSION; ++wy) {
@@ -259,7 +214,7 @@ void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, in
                         yIndex = -yIndex;
                     if(xIndex >= width)
                         xIndex = xIndex - KERNEL_DIMENSION - 1;
-                    if(yIndex >= height - 1 + offset)
+                    if(yIndex >= height)
                         yIndex = yIndex - KERNEL_DIMENSION - 1;
 
                     /* Build up moving window */
@@ -274,7 +229,7 @@ void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, in
 
 #if USE_THRESHOLD
             /* Clamp down color values if */
-            output_image[x + (y - 1 - offset) * width] = magnitude > THRESHOLD ? 255 : 0;
+            output_image[x + (y) * width] = magnitude > THRESHOLD ? 255 : 0;
 #else
             /* Use whatever value outputted from square root */
             output_image[x + y * width] = (uint8_t) magnitude;
@@ -283,16 +238,28 @@ void par_edgeDetection(uint8_t *input_image, int width, int height, int rank, in
 		}
 	}
 
+    int offset;
+    if(rank == 0) {
+        offset = 0;
+    }
+    else if (rank != comm_sz - 1) {
+        offset = 1;
+    }
+    else {
+        offset = 2;
+    }
+
     /* copy zone to input array */
     for(int y = 0 ; y < height - 2; ++y) {
         for(int x = 0; x < width; ++x) {
-            input_image[x + (y) * width] = output_image[x + (y) * width];
+            input_image[x + (y) * width] = output_image[x + (y + offset) * width];
         }
     }
 
+    //stbi_write_jpg((std::to_string(rank) + ".jpg").c_str(), width, height - 2, CHANNEL_NUM, input_image, 100);
+
     /* De-allocate dynamic arrays */
     free(output_image);
-
 }
 
 /* Convolve slider across kernel (multiply and sum values of two arrays) */
