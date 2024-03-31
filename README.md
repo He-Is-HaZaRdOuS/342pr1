@@ -59,6 +59,7 @@ open a terminal window and cd into the project folder </br>
 ```
 
 the executable will be generated inside the respective build-X folder. </br>
+Release preset uses -O2 flag whereas the Debug preset uses the default optimization flag and enables debug symbols. </br>
 
 ## Running
 To run the sequential executable, open a terminal window and type </br>
@@ -67,11 +68,12 @@ To run the sequential executable, open a terminal window and type </br>
 ```
 To run the parallel executable, open a terminal window and type </br>
 ```bash
-mpirun -n <N> ./parallel <INPUT> <OUTPUT>
+mpirun -n <N> ./parallel <INPUT> <OUTPUT> <SEQUENTIAL_INPUT>
 ```
 
 The following explains the arguments and their format.
 * N: Number of cores to allocate to the program
 * INPUT: Name of input image file
 * OUTPUT: Name of output image file
+* SEQUENTIAL_INPUT: Name of the output image file from the sequential program
 </br>

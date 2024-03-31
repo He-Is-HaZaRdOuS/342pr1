@@ -7,6 +7,22 @@ add_executable(parallel "${CMAKE_CURRENT_SOURCE_DIR}/src/mpi_main.cpp")
 
 find_package(MPI REQUIRED)
 
+if(CMAKE_BUILD_TYPE MATCHES "Debug")
+    message("BUILDING DEBUG!")
+    target_compile_options(sequential
+            PUBLIC -W -Wall -Wextra -g -Og -DDebug -pedantic -pedantic-errors)
+    target_compile_options(parallel
+            PUBLIC -W -Wall -Wextra -g -Og -DDebug -pedantic -pedantic-errors)
+endif()
+
+if(CMAKE_BUILD_TYPE MATCHES "Release")
+    message("BUILDING RELEASE!")
+    target_compile_options(sequential
+            PUBLIC -DNDEBUG -O2)
+    target_compile_options(parallel
+            PUBLIC -DNDEBUG -O2)
+endif()
+
 message(STATUS "Run: ${MPIEXEC} ${MPIEXEC_NUMPROC_FLAG} ${MPIEXEC_MAX_NUMPROCS} ${MPIEXEC_PREFLAGS} EXECUTABLE ${MPIEXEC_POSTFLAGS} ARGS")
 
 target_link_libraries(sequential PUBLIC MPI::MPI_CXX)
