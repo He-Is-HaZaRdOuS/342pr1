@@ -29,7 +29,7 @@
 #define CHANNEL_NUM 1
 #define KERNEL_DIMENSION 3
 #define THRESHOLD 40
-#define USE_THRESHOLD 1
+#define USE_THRESHOLD 0
 
 //Do not use global variables
 
@@ -88,15 +88,9 @@ void seq_edgeDetection(uint8_t *input_image, int width, int height) {
 
     /* Declare helper variables */
     float slider[KERNEL_DIMENSION][KERNEL_DIMENSION];
-    float gx = 0;
-    float gy = 0;
 
     /* Allocate temporary memory to construct final image */
-    uint8_t *output_image_u8 = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
-    uint8_t *output_image_blur_u8 = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
-    //uint8_t *gradientX_u8 = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
-    //uint8_t *gradientY_u8 = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
-    //uint8_t *angle_u8 = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
+    uint8_t *output_image = (uint8_t*) malloc(width * height * sizeof(uint8_t)); // NOLINT(*-use-auto)
 
     /* Iterate through all pixels */
 	for(int y = 0; y < height; ++y) {
@@ -121,10 +115,8 @@ void seq_edgeDetection(uint8_t *input_image, int width, int height) {
             }
 
             /* Convolve moving window with kernels (Sobel X and Y gradient) */
-            gx = convolve(slider, sobelX);
-            gy = convolve(slider, sobelY);
-            //gradientX_u8[x + y * width] = (uint8_t) gx;
-            //gradientY_u8[x + y * width] = (uint8_t) gy;
+            float gx = convolve(slider, sobelX);
+            float gy = convolve(slider, sobelY);
             float magnitude = sqrt(gx * gx + gy * gy);
 
 #if USE_THRESHOLD
@@ -132,29 +124,16 @@ void seq_edgeDetection(uint8_t *input_image, int width, int height) {
             output_image_u8[x + y * width] = magnitude > THRESHOLD ? 255 : 0;
 #else
             /* Use whatever value outputted from square root */
-            output_image_u8[x + y * width] = (uint8_t) magnitude;
+            output_image[x + y * width] = (uint8_t) magnitude;
 #endif
-            //angle_u8[x + y * width] = (uint8_t) atan2(gy, gx);
 		}
 	}
 
     /* memcpy final image data to input pointer */
-    memcpy(input_image, output_image_u8, width * height * sizeof(uint8_t ));
-
-/*
-    stbi_write_jpg(SEQUENTIAL_OUTPUT_PATH "sobel.jpg", width, height, CHANNEL_NUM, output_image_u8, 100);
-    stbi_write_jpg(SEQUENTIAL_OUTPUT_PATH "gradientX.jpg", width, height, CHANNEL_NUM, gradientX_u8, 100);
-    stbi_write_jpg(SEQUENTIAL_OUTPUT_PATH "gradientY.jpg", width, height, CHANNEL_NUM, gradientY_u8, 100);
-    stbi_write_jpg(SEQUENTIAL_OUTPUT_PATH "angle.jpg", width, height, CHANNEL_NUM, angle_u8, 100);
-*/
+    memcpy(input_image, output_image, width * height * sizeof(uint8_t ));
 
     /* De-allocate dynamic arrays */
-    free(output_image_u8);
-    free(output_image_blur_u8);
-    //free(gradientX_u8);
-    //free(gradientY_u8);
-    //free(angle_u8);
-
+    free(output_image);
 }
 
 /* Convolve slider across kernel (multiply and sum values of two arrays) */
