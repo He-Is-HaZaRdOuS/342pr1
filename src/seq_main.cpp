@@ -105,9 +105,9 @@ void seq_edgeDetection(uint8_t *input_image, const int width, const int height) 
                     if(yIndex < 0)
                         yIndex = -yIndex;
                     if(xIndex >= width)
-                        xIndex = xIndex - KERNEL_DIMENSION - 1;
+                        xIndex = width - 1;
                     if(yIndex >= height)
-                        yIndex = yIndex - KERNEL_DIMENSION - 1;
+                        yIndex = height - 1;
 
                     /* Build up sliding window */
                     slider[wy][wx] = input_image[xIndex + yIndex * width];

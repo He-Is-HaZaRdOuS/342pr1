@@ -34,7 +34,7 @@
 #define KERNEL_DIMENSION 3
 #define THRESHOLD 40
 #define USE_THRESHOLD 0
-#define USE_LOAD_BALANCING 1
+#define USE_LOAD_BALANCING 0
 
 //Do not use global variables
 
@@ -230,9 +230,9 @@ void par_edgeDetection(uint8_t *input_image, const int width, const int height, 
                     if(yIndex < 0)
                         yIndex = -yIndex;
                     if(xIndex >= width)
-                        xIndex = xIndex - KERNEL_DIMENSION - 1;
+                        xIndex = width - 1;
                     if(yIndex >= height)
-                        yIndex = yIndex - KERNEL_DIMENSION - 1;
+                        yIndex = height - 1;
 
                     /* Build up sliding window */
                     slider[wy][wx] = input_image[xIndex + yIndex * width];
